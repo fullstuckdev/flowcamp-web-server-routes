@@ -20,10 +20,11 @@ func main() {
 	r := gin.Default()
 	db := config.ConnectDatabase()
 
-	db.AutoMigrate(&models.User{})
+	db.AutoMigrate(&models.User{}, &models.Post{}, &models.Tag{}, &models.PostTag{})
 
 	authController := controllers.NewAuthController(db)
 	userController := controllers.NewUserController(db)
+	postController := controllers.NewPostController(db)
 
 
 	api := r.Group("/api")
@@ -39,6 +40,19 @@ func main() {
 		 protected.Use(middleware.AuthMiddleware())
 		 {
 			 protected.GET("/users", userController.GetUsers)
+			 protected.POST("/users", userController.CreateUser)
+
+			 // Tag routes
+			 protected.POST("/tags", postController.CreateTag)
+
+			 // Without DB routes
+			 protected.POST("/send", controllers.CreateUserWithoutDB)
+			 protected.GET("/get", controllers.GetUserWithoutDB)
+
+			 // Post Routes
+			 protected.POST("/post", postController.CreatePost)
+			 protected.GET("/post", postController.GetPosts)
+			 protected.GET("/posts/:id", postController.GetPost)
 		 }
 	}
 

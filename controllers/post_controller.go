@@ -206,7 +206,13 @@ func (pc *PostController) CreateTransactionWithTx(c *gin.Context) {
 
 	tx.Commit()
 
-	c.JSON(201, gin.H{"data": transaction})
+	// Reload the transaction with user data
+	if err := pc.DB.Preload("User").First(&transaction, transaction.ID).Error; err != nil {
+		c.JSON(400, gin.H{"error": "Error loading created data"})
+		return
+	}
+
+	c.JSON(201, gin.H{"data": transaction.ToResponse()})
 }
 
 func (pc *PostController) CreateTransactionWithoutTx(c *gin.Context) {
@@ -274,4 +280,306 @@ func (pc *PostController) CreateTransactionWithoutTx(c *gin.Context) {
 	}
 
 	c.JSON(201, gin.H{"data": transaction})
+}
+
+// Update Post
+func (pc *PostController) UpdatePost(c *gin.Context) {
+	var req models.UpdatePostRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	userId, exists := c.Get("userId")
+	if !exists {
+		c.JSON(401, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var post models.Post
+	// Check if post exists and belongs to user
+	if err := pc.DB.Where("id = ? AND user_id = ?", c.Param("id"), userId).First(&post).Error; err != nil {
+		c.JSON(404, gin.H{"error": "Post not found or unauthorized"})
+		return
+	}
+
+	tx := pc.DB.Begin()
+
+	// Update basic post info
+	if req.Title != "" {
+		post.Title = req.Title
+	}
+	if req.Content != "" {
+		post.Content = req.Content
+	}
+
+	if err := tx.Save(&post).Error; err != nil {
+		tx.Rollback()
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Update tags if provided
+	if len(req.TagIds) > 0 {
+		var tags []models.Tag
+		if err := tx.Find(&tags, req.TagIds).Error; err != nil {
+			tx.Rollback()
+			c.JSON(400, gin.H{"error": "Invalid tag IDs"})
+			return
+		}
+
+		if len(tags) != len(req.TagIds) {
+			tx.Rollback()
+			c.JSON(400, gin.H{"error": "Some tags were not found"})
+			return
+		}
+
+		// Replace existing tags
+		if err := tx.Model(&post).Association("Tags").Replace(&tags); err != nil {
+			tx.Rollback()
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	tx.Commit()
+
+	// Reload post with associations
+	if err := pc.DB.Preload("User").Preload("Tags").First(&post, post.ID).Error; err != nil {
+		c.JSON(400, gin.H{"error": "Error loading updated post"})
+		return
+	}
+
+	c.JSON(200, gin.H{"data": post.ToResponse()})
+}
+
+// Delete Post
+func (pc *PostController) DeletePost(c *gin.Context) {
+	userId, exists := c.Get("userId")
+	if !exists {
+		c.JSON(401, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var post models.Post
+	// Check if post exists and belongs to user
+	if err := pc.DB.Where("id = ? AND user_id = ?", c.Param("id"), userId).First(&post).Error; err != nil {
+		c.JSON(404, gin.H{"error": "Post not found or unauthorized"})
+		return
+	}
+
+	tx := pc.DB.Begin()
+
+	// Clear associations first
+	if err := tx.Model(&post).Association("Tags").Clear(); err != nil {
+		tx.Rollback()
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Delete the post
+	if err := tx.Delete(&post).Error; err != nil {
+		tx.Rollback()
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	tx.Commit()
+
+	c.JSON(200, gin.H{"data": "Post deleted successfully"})
+}
+
+// Update Transaction
+func (pc *PostController) UpdateTransaction(c *gin.Context) {
+	var req models.UpdateTransactionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	userId, exists := c.Get("userId")
+	if !exists {
+		c.JSON(401, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	tx := pc.DB.Begin()
+
+	var transaction models.Transaction
+	if err := tx.Where("id = ? AND user_id = ?", c.Param("id"), userId).First(&transaction).Error; err != nil {
+		tx.Rollback()
+		c.JSON(404, gin.H{"error": "Transaction not found or unauthorized"})
+		return
+	}
+
+	// Get user for balance update
+	var user models.User
+	if err := tx.First(&user, userId).Error; err != nil {
+		tx.Rollback()
+		c.JSON(404, gin.H{"error": "User not found"})
+		return
+	}
+
+	// Store original values
+	currentBalance := user.Balance
+	oldAmount := transaction.Amount
+	oldType := transaction.Type
+
+	// Calculate balance after reverting the old transaction
+	var balanceAfterRevert float64
+	if oldType == "credit" {
+		balanceAfterRevert = currentBalance - oldAmount
+	} else { // if it was a debit
+		balanceAfterRevert = currentBalance + oldAmount
+	}
+
+	// Validate and calculate new balance
+	var newBalance float64
+	if req.Type == "debit" {
+		if balanceAfterRevert < req.Amount {
+			tx.Rollback()
+			c.JSON(400, gin.H{"error": "Insufficient balance"})
+			return
+		}
+		newBalance = balanceAfterRevert - req.Amount
+	} else { // credit
+		newBalance = balanceAfterRevert + req.Amount
+	}
+
+	// Update user's balance
+	user.Balance = newBalance
+
+	// Update transaction
+	transaction.Amount = req.Amount
+	transaction.Description = req.Description
+	transaction.Type = req.Type
+
+	// Save changes
+	if err := tx.Save(&transaction).Error; err != nil {
+		tx.Rollback()
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := tx.Save(&user).Error; err != nil {
+		tx.Rollback()
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	tx.Commit()
+
+	// Reload the transaction with user data
+	if err := pc.DB.Preload("User").First(&transaction, transaction.ID).Error; err != nil {
+		c.JSON(400, gin.H{"error": "Error loading updated data"})
+		return
+	}
+
+	c.JSON(200, gin.H{"data": transaction.ToResponse()})
+}
+
+// Delete Transaction
+func (pc *PostController) DeleteTransaction(c *gin.Context) {
+	userId, exists := c.Get("userId")
+	if !exists {
+		c.JSON(401, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	tx := pc.DB.Begin()
+
+	var transaction models.Transaction
+	// Use Unscoped() to ignore soft delete
+	if err := tx.Unscoped().Where("id = ? AND user_id = ?", c.Param("id"), userId).First(&transaction).Error; err != nil {
+		tx.Rollback()
+		c.JSON(404, gin.H{"error": "Transaction not found or unauthorized"})
+		return
+	}
+
+	// Get user for balance update
+	var user models.User
+	if err := tx.First(&user, userId).Error; err != nil {
+		tx.Rollback()
+		c.JSON(404, gin.H{"error": "User not found"})
+		return
+	}
+
+	// Revert transaction from balance
+	if transaction.Type == "credit" {
+		user.Balance -= transaction.Amount
+	} else {
+		user.Balance += transaction.Amount
+	}
+
+	// Save updated balance
+	if err := tx.Save(&user).Error; err != nil {
+		tx.Rollback()
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Perform hard delete using Unscoped()
+	if err := tx.Unscoped().Delete(&transaction).Error; err != nil {
+		tx.Rollback()
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	tx.Commit()
+
+	c.JSON(200, gin.H{
+		"data": "Transaction permanently deleted",
+		"transaction_id": transaction.ID,
+		"updated_balance": user.Balance,
+	})
+}
+
+// GetUserTransactions retrieves all transactions for the current user
+func (pc *PostController) GetUserTransactions(c *gin.Context) {
+	userId, exists := c.Get("userId")
+	if !exists {
+		c.JSON(401, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var transactions []models.Transaction
+	if err := pc.DB.Where("user_id = ?", userId).Order("created_at desc").Find(&transactions).Error; err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Load user data for each transaction
+	for i := range transactions {
+		if err := pc.DB.Preload("User").First(&transactions[i], transactions[i].ID).Error; err != nil {
+			c.JSON(400, gin.H{"error": "Error loading transaction data"})
+			return
+		}
+	}
+
+	response := make([]models.TransactionResponse, len(transactions))
+	for i, tx := range transactions {
+		response[i] = tx.ToResponse()
+	}
+
+	c.JSON(200, gin.H{
+		"data": response,
+		"count": len(response),
+	})
+}
+
+// GetTransaction retrieves a specific transaction by ID
+func (pc *PostController) GetTransaction(c *gin.Context) {
+	userId, exists := c.Get("userId")
+	if !exists {
+		c.JSON(401, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var transaction models.Transaction
+	if err := pc.DB.Preload("User").Where("id = ? AND user_id = ?", c.Param("id"), userId).First(&transaction).Error; err != nil {
+		c.JSON(404, gin.H{"error": "Transaction not found or unauthorized"})
+		return
+	}
+
+	c.JSON(200, gin.H{"data": transaction.ToResponse()})
 }

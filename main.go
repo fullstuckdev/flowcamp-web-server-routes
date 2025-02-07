@@ -54,16 +54,21 @@ func main() {
 			protected.POST("/posts", postController.CreatePost)
 			protected.GET("/posts", postController.GetPosts)
 			protected.GET("/posts/:id", postController.GetPost)
+			protected.PUT("/posts/:id", postController.UpdatePost)
+			protected.DELETE("/posts/:id", postController.DeletePost)
 
 			// Transaction Routes
 			transactions := protected.Group("/transactions")
 			{
 				// With Transaction (ACID)
 				transactions.POST("/", postController.CreateTransactionWithTx)
-				
+				transactions.GET("/", postController.GetUserTransactions)
+				transactions.GET("/:id", postController.GetTransaction)
+				transactions.PUT("/:id", postController.UpdateTransaction)
+				transactions.DELETE("/:id", postController.DeleteTransaction)
+
 				// Without Transaction (Demonstration purposes)
 				transactions.POST("/no-tx", postController.CreateTransactionWithoutTx)
-			
 			}
 
 		}

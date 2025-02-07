@@ -62,6 +62,12 @@ type TransactionResponse struct {
 	User        UserResponse  `json:"user"`
 }
 
+type UpdateTransactionRequest struct {
+	Amount      float64 `json:"amount" binding:"required,gt=0"`
+	Description string  `json:"description" binding:"required"`
+	Type        string  `json:"type" binding:"required,oneof=credit debit"`
+}
+
 // User methods
 func (u *User) HashPassword(password string) error {
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)

@@ -3,9 +3,10 @@ package main
 import (
 	"golangapi/config"
 	"golangapi/controllers"
+	"golangapi/middleware"
 	"golangapi/models"
 	"log"
-	"golangapi/middleware"
+
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
@@ -20,12 +21,11 @@ func main() {
 	r := gin.Default()
 	db := config.ConnectDatabase()
 
-	db.AutoMigrate(&models.User{}, &models.Post{}, &models.Tag{}, &models.PostTag{})
+	db.AutoMigrate(&models.User{}, &models.Transaction{}, &models.Post{}, &models.Tag{}, &models.PostTag{})
 
 	authController := controllers.NewAuthController(db)
 	userController := controllers.NewUserController(db)
 	postController := controllers.NewPostController(db)
-
 
 	api := r.Group("/api")
 	{
@@ -35,25 +35,38 @@ func main() {
 			auth.POST("/login", authController.Login)
 		}
 
-		 // Protected routes
-		 protected := api.Group("/")
-		 protected.Use(middleware.AuthMiddleware())
-		 {
-			 protected.GET("/users", userController.GetUsers)
-			 protected.POST("/users", userController.CreateUser)
+		// Protected routes
+		protected := api.Group("/")
+		protected.Use(middleware.AuthMiddleware())
+		{
+			// User routes
+			protected.GET("/users", userController.GetUsers)
+			protected.POST("/users", userController.CreateUser)
 
-			 // Tag routes
-			 protected.POST("/tags", postController.CreateTag)
+			// Tag routes
+			protected.POST("/tags", postController.CreateTag)
 
-			 // Without DB routes
-			 protected.POST("/send", controllers.CreateUserWithoutDB)
-			 protected.GET("/get", controllers.GetUserWithoutDB)
+			// Without DB routes
+			protected.POST("/send", controllers.CreateUserWithoutDB)
+			protected.GET("/get", controllers.GetUserWithoutDB)
 
-			 // Post Routes
-			 protected.POST("/post", postController.CreatePost)
-			 protected.GET("/post", postController.GetPosts)
-			 protected.GET("/posts/:id", postController.GetPost)
-		 }
+			// Post Routes
+			protected.POST("/posts", postController.CreatePost)
+			protected.GET("/posts", postController.GetPosts)
+			protected.GET("/posts/:id", postController.GetPost)
+
+			// Transaction Routes
+			transactions := protected.Group("/transactions")
+			{
+				// With Transaction (ACID)
+				transactions.POST("/", postController.CreateTransactionWithTx)
+				
+				// Without Transaction (Demonstration purposes)
+				transactions.POST("/no-tx", postController.CreateTransactionWithoutTx)
+			
+			}
+
+		}
 	}
 
 	r.Run(":8080")

@@ -1,7 +1,9 @@
 package controllers
 
 import (
+	"fmt"
 	"golangapi/models"
+
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -32,24 +34,23 @@ func (pc *PostController) CreateTag(c *gin.Context) {
 	}})
 }
 
-
 func (pc *PostController) CreatePost(c *gin.Context) {
 	var req models.CreatePostRequest
-	if err := c.ShouldBindBodyWithJSON(&req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
+		return
 	}
 
 	userId, exists := c.Get("userId")
-
 	if !exists {
 		c.JSON(401, gin.H{"error": "Unauthorized"})
 		return
 	}
 
-	post := models.Post {
-		Title: req.Title,
+	post := models.Post{
+		Title:   req.Title,
 		Content: req.Content,
-		UserId: userId.(uint),
+		UserID:  userId.(uint),
 	}
 
 	tx := pc.DB.Begin()
@@ -90,8 +91,7 @@ func (pc *PostController) CreatePost(c *gin.Context) {
 		return
 	} 
 
-	c.JSON(201, gin.H{"data": post})
-
+	c.JSON(201, gin.H{"data": post.ToResponse()})
 }
 
 func (pc *PostController) GetPosts(c *gin.Context) {
@@ -138,4 +138,140 @@ func (pc *PostController) GetPost(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"data": post})
+}
+
+// Simulate database error after certain amount
+func simulateError(amount float64) error {
+	if amount == 999.99 {
+		return fmt.Errorf("simulated database error")
+	}
+	return nil
+}
+
+func (pc *PostController) CreateTransactionWithTx(c *gin.Context) {
+	var transaction models.Transaction
+	if err := c.ShouldBindJSON(&transaction); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	userId, exists := c.Get("userId")
+	if !exists {
+		c.JSON(401, gin.H{"error": "Unauthorized"})
+		return
+	}
+	transaction.UserID = userId.(uint)
+
+	tx := pc.DB.Begin()
+
+	var user models.User
+	if err := tx.First(&user, userId).Error; err != nil {
+		tx.Rollback()
+		c.JSON(404, gin.H{"error": "User not found"})
+		return
+	}
+
+	if transaction.Type == "credit" {
+		user.Balance += transaction.Amount
+	} else if transaction.Type == "debit" {
+		if user.Balance < transaction.Amount {
+			tx.Rollback()
+			c.JSON(400, gin.H{"error": "Insufficient balance"})
+			return
+		}
+		user.Balance -= transaction.Amount
+	}
+
+	if err := tx.Create(&transaction).Error; err != nil {
+		tx.Rollback()
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := simulateError(transaction.Amount); err != nil {
+		tx.Rollback()
+		c.JSON(500, gin.H{
+			"error": err.Error(),
+			"status": "All changes rolled back. Transaction cancelled and balance unchanged.",
+			"current_balance": user.Balance - transaction.Amount,
+		})
+		return
+	}
+
+	if err := tx.Save(&user).Error; err != nil {
+		tx.Rollback()
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	tx.Commit()
+
+	c.JSON(201, gin.H{"data": transaction})
+}
+
+func (pc *PostController) CreateTransactionWithoutTx(c *gin.Context) {
+	var transaction models.Transaction
+	if err := c.ShouldBindJSON(&transaction); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	userId, exists := c.Get("userId")
+	if !exists {
+		c.JSON(401, gin.H{"error": "Unauthorized"})
+		return
+	}
+	transaction.UserID = userId.(uint)
+
+	// Get user for balance update
+	var user models.User
+	if err := pc.DB.First(&user, userId).Error; err != nil {
+		c.JSON(404, gin.H{"error": "User not found"})
+		return
+	}
+
+	originalBalance := user.Balance
+
+	// Update balance based on transaction type
+	if transaction.Type == "credit" {
+		user.Balance += transaction.Amount
+	} else if transaction.Type == "debit" {
+		if user.Balance < transaction.Amount {
+			c.JSON(400, gin.H{"error": "Insufficient balance"})
+			return
+		}
+		user.Balance -= transaction.Amount
+	}
+
+	// Save transaction
+	if err := pc.DB.Create(&transaction).Error; err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Simulate error after transaction is created
+	if err := simulateError(transaction.Amount); err != nil {
+		c.JSON(500, gin.H{
+			"error": err.Error(),
+			"status": "Transaction was created but balance update failed. DATA INCONSISTENCY!",
+			"transaction_id": transaction.ID,
+			"original_balance": originalBalance,
+			"failed_balance_update": user.Balance,
+			"warning": "Database is now in an inconsistent state!",
+		})
+		return
+	}
+
+	// Update user balance
+	if err := pc.DB.Save(&user).Error; err != nil {
+		c.JSON(400, gin.H{
+			"error": err.Error(),
+			"status": "Transaction was created but balance update failed. DATA INCONSISTENCY!",
+			"transaction_id": transaction.ID,
+			"warning": "Database is now in an inconsistent state!",
+		})
+		return
+	}
+
+	c.JSON(201, gin.H{"data": transaction})
 }

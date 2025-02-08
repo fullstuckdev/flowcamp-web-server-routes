@@ -53,6 +53,8 @@ func main() {
 			 protected.POST("/post", postController.CreatePost)
 			 protected.GET("/post", postController.GetPosts)
 			 protected.GET("/posts/:id", postController.GetPost)
+			 protected.PUT("/posts/:id", postController.UpdatePost)
+			 protected.DELETE("/posts/:id", postController.DeletePost)
 		 }
 	}
 

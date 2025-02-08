@@ -55,3 +55,10 @@ type PostResponse struct {
 	Tags []TagResponse `json:"tags"`
 }
 
+
+type UpdatePostRequest struct {
+	Title   string `json:"title" binding:"omitempty,min=3"`
+	Content string `json:"content" binding:"omitempty,min=10"`
+	TagIds  []uint `json:"tag_ids" binding:"omitempty,dive,gt=0"`
+}
+

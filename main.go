@@ -25,6 +25,7 @@ func main() {
 	authController := controllers.NewAuthController(db)
 	userController := controllers.NewUserController(db)
 	postController := controllers.NewPostController(db)
+	sysController := controllers.NewSysController(db)
 
 
 	api := r.Group("/api")
@@ -55,6 +56,18 @@ func main() {
 			 protected.GET("/posts/:id", postController.GetPost)
 			 protected.PUT("/posts/:id", postController.UpdatePost)
 			 protected.DELETE("/posts/:id", postController.DeletePost)
+
+			 // SYS Routes
+			 protected.POST("/directory", sysController.CreateDirectory)
+			 protected.POST("/file", sysController.CreateFile)
+			 protected.POST("/file/read", sysController.ReadFile)
+
+			 protected.PUT("/file/rename", sysController.RenameFile)
+
+			 protected.POST("/file/upload", sysController.UploadFile)
+
+			 protected.GET("/file/download", sysController.DownloadFile)
+
 		 }
 	}
 
